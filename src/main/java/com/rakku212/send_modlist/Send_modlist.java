@@ -17,6 +17,7 @@ import net.minecraftforge.fml.loading.FMLLoader;
 import net.minecraftforge.forgespi.language.IModInfo;
 import net.minecraftforge.network.ChannelBuilder;
 import net.minecraftforge.network.EventNetworkChannel;
+import net.minecraftforge.network.ForgePayload;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -45,13 +46,16 @@ public class Send_modlist {
     public Send_modlist(FMLJavaModLoadingContext context) {
         CommonClass.init();
         CHANNEL.addListener(Send_modlist::onCustomPayload);
-        net.minecraftforge.common.MinecraftForge.EVENT_BUS.addListener(Send_modlist::onScreenRenderPost);
-        net.minecraftforge.common.MinecraftForge.EVENT_BUS.addListener(Send_modlist::onClientTick);
-        net.minecraftforge.common.MinecraftForge.EVENT_BUS.addListener(Send_modlist::onLoggingOut);
+        ScreenEvent.Render.Post.BUS.addListener(Send_modlist::onScreenRenderPost);
+        TickEvent.ClientTickEvent.Post.BUS.addListener(Send_modlist::onClientTick);
+        ClientPlayerNetworkEvent.LoggingOut.BUS.addListener(Send_modlist::onLoggingOut);
     }
 
     private static void onCustomPayload(CustomPayloadEvent event) {
         FriendlyByteBuf payload = event.getPayload();
+        if (payload == null) {
+            return;
+        }
         byte[] bytes = new byte[payload.readableBytes()];
         payload.readBytes(bytes);
         handleServerMessage(new String(bytes, StandardCharsets.UTF_8).trim());
@@ -64,10 +68,7 @@ public class Send_modlist {
         fillOverlay(event.getGuiGraphics(), event.getScreen().width, event.getScreen().height);
     }
 
-    private static void onClientTick(TickEvent.ClientTickEvent event) {
-        if (event.phase != TickEvent.Phase.END) {
-            return;
-        }
+    private static void onClientTick(TickEvent.ClientTickEvent.Post event) {
         ensureVerifyingScreenVisible();
         tryDeliverModListPayload();
     }
@@ -184,25 +185,9 @@ public class Send_modlist {
         }
     }
 
-    private static CustomPacketPayload createForgePayload(byte[] payloadBytes) throws Exception {
-        Class<?> payloadClass = Class.forName("net.minecraftforge.network.ForgePayload");
-        for (var method : payloadClass.getDeclaredMethods()) {
-            if (!"create".equals(method.getName()) || method.getParameterCount() != 2) {
-                continue;
-            }
-            Class<?>[] parameterTypes = method.getParameterTypes();
-            if (!parameterTypes[1].isAssignableFrom(Consumer.class) && !Consumer.class.isAssignableFrom(parameterTypes[1])) {
-                continue;
-            }
-            if (!parameterTypes[0].isAssignableFrom(ModListProtocol.CHANNEL_ID.getClass())
-                    && !ModListProtocol.CHANNEL_ID.getClass().isAssignableFrom(parameterTypes[0])) {
-                continue;
-            }
-            method.setAccessible(true);
-            Consumer<FriendlyByteBuf> encoder = buf -> buf.writeBytes(payloadBytes);
-            return (CustomPacketPayload) method.invoke(null, ModListProtocol.CHANNEL_ID, encoder);
-        }
-        throw new IllegalStateException("Unsupported ForgePayload.create signature");
+    private static CustomPacketPayload createForgePayload(byte[] payloadBytes) {
+        Consumer<FriendlyByteBuf> encoder = buf -> buf.writeBytes(payloadBytes);
+        return ForgePayload.create(ModListProtocol.CHANNEL_ID, encoder);
     }
 
     private static void bumpWaitLog() {
