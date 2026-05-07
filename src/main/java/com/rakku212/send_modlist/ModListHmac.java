@@ -3,7 +3,6 @@ package com.rakku212.send_modlist;
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
 import java.nio.charset.StandardCharsets;
-import java.util.HexFormat;
 
 public final class ModListHmac {
     private static final String HMAC_SHA256 = "HmacSHA256";
@@ -18,7 +17,16 @@ public final class ModListHmac {
         try {
             Mac mac = Mac.getInstance(HMAC_SHA256);
             mac.init(new SecretKeySpec(key, HMAC_SHA256));
-            return HexFormat.of().formatHex(mac.doFinal(message));
+            byte[] digest = mac.doFinal(message);
+            StringBuilder builder = new StringBuilder(digest.length * 2);
+            for (byte b : digest) {
+                int value = b & 0xFF;
+                if (value < 0x10) {
+                    builder.append('0');
+                }
+                builder.append(Integer.toHexString(value));
+            }
+            return builder.toString();
         } catch (Exception exception) {
             throw new IllegalStateException(exception);
         }

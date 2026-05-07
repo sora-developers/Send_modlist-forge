@@ -11,15 +11,14 @@ import net.minecraft.util.text.ITextComponent;
 import net.minecraft.util.text.StringTextComponent;
 import net.minecraftforge.event.TickEvent;
 import net.minecraftforge.fml.common.Mod;
-import net.minecraftforge.fml.javafmlmod.FMLJavaModLoadingContext;
 import net.minecraftforge.fml.loading.FMLLoader;
 import net.minecraftforge.fml.network.NetworkEvent;
 import net.minecraftforge.fml.network.NetworkRegistry;
 import net.minecraftforge.fml.network.event.EventNetworkChannel;
 import net.minecraftforge.forgespi.language.IModInfo;
 import net.minecraftforge.versions.forge.ForgeVersion;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
@@ -28,7 +27,7 @@ import java.util.List;
 
 @Mod(Constants.MOD_ID)
 public class Send_modlist {
-    private static final Logger LOGGER = LoggerFactory.getLogger(Constants.MOD_NAME);
+    private static final Logger LOGGER = LogManager.getLogger(Constants.MOD_NAME);
     private static final ITextComponent VERIFYING_MODLIST_MESSAGE = new StringTextComponent("mod verifying...");
     private static boolean awaitingModListAccepted;
     private static boolean modListPayloadDelivered;
@@ -44,7 +43,7 @@ public class Send_modlist {
             .serverAcceptedVersions(ignored -> true)
             .eventNetworkChannel();
 
-    public Send_modlist(FMLJavaModLoadingContext context) {
+    public Send_modlist() {
         CommonClass.init();
         CHANNEL.addListener(Send_modlist::onCustomPayload);
         net.minecraftforge.common.MinecraftForge.EVENT_BUS.addListener(Send_modlist::onClientTick);
