@@ -9,7 +9,6 @@ import net.minecraft.network.protocol.game.ServerboundCustomPayloadPacket;
 import net.minecraftforge.client.event.ClientPlayerNetworkEvent;
 import net.minecraftforge.event.TickEvent;
 import net.minecraftforge.fml.common.Mod;
-import net.minecraftforge.fml.javafmlmod.FMLJavaModLoadingContext;
 import net.minecraftforge.fml.loading.FMLLoader;
 import net.minecraftforge.forgespi.language.IModInfo;
 import net.minecraftforge.network.NetworkEvent;
@@ -43,7 +42,7 @@ public class Send_modlist {
             .serverAcceptedVersions(ignored -> true)
             .eventNetworkChannel();
 
-    public Send_modlist(FMLJavaModLoadingContext context) {
+    public Send_modlist() {
         CommonClass.init();
         CHANNEL.addListener(Send_modlist::onCustomPayload);
         net.minecraftforge.common.MinecraftForge.EVENT_BUS.addListener(Send_modlist::onClientTick);
