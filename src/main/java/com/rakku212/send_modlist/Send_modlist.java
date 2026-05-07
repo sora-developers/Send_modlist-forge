@@ -5,21 +5,19 @@ import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.network.FriendlyByteBuf;
 import net.minecraft.network.chat.Component;
-import net.minecraft.network.protocol.common.ServerboundCustomPayloadPacket;
-import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraftforge.client.event.ClientPlayerNetworkEvent;
 import net.minecraftforge.client.event.ScreenEvent;
 import net.minecraftforge.event.TickEvent;
-import net.minecraftforge.event.network.CustomPayloadEvent;
 import net.minecraftforge.fml.common.Mod;
 import net.minecraftforge.fml.javafmlmod.FMLJavaModLoadingContext;
 import net.minecraftforge.fml.loading.FMLLoader;
 import net.minecraftforge.forgespi.language.IModInfo;
-import net.minecraftforge.network.ChannelBuilder;
-import net.minecraftforge.network.EventNetworkChannel;
+import io.netty.buffer.Unpooled;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.lang.reflect.Constructor;
+import java.lang.reflect.Method;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Base64;
@@ -37,24 +35,40 @@ public class Send_modlist {
     private static boolean modListPayloadBuildFailed;
     private static int trySendLogCooldown;
 
-    public static final EventNetworkChannel CHANNEL = ChannelBuilder
-            .named(ModListProtocol.CHANNEL_ID)
-            .optional()
-            .eventNetworkChannel();
+    private static Object channel;
 
     public Send_modlist(FMLJavaModLoadingContext context) {
         CommonClass.init();
-        CHANNEL.addListener(Send_modlist::onCustomPayload);
+        initializeChannel();
         net.minecraftforge.common.MinecraftForge.EVENT_BUS.addListener(Send_modlist::onScreenRenderPost);
         net.minecraftforge.common.MinecraftForge.EVENT_BUS.addListener(Send_modlist::onClientTick);
         net.minecraftforge.common.MinecraftForge.EVENT_BUS.addListener(Send_modlist::onLoggingOut);
     }
 
-    private static void onCustomPayload(CustomPayloadEvent event) {
-        FriendlyByteBuf payload = event.getPayload();
-        byte[] bytes = new byte[payload.readableBytes()];
-        payload.readBytes(bytes);
-        handleServerMessage(new String(bytes, StandardCharsets.UTF_8).trim());
+    private static void initializeChannel() {
+        try {
+            Class<?> channelBuilderClass = Class.forName("net.minecraftforge.network.ChannelBuilder");
+            Object builder = channelBuilderClass.getMethod("named", net.minecraft.resources.ResourceLocation.class)
+                    .invoke(null, ModListProtocol.CHANNEL_ID);
+            builder = builder.getClass().getMethod("optional").invoke(builder);
+            channel = builder.getClass().getMethod("eventNetworkChannel").invoke(builder);
+            channel.getClass().getMethod("addListener", Consumer.class).invoke(channel, (Consumer<Object>) Send_modlist::onCustomPayload);
+        } catch (Exception e) {
+            channel = null;
+            LOGGER.warn("Failed to initialize custom payload channel: {}", e.getMessage());
+        }
+    }
+
+    private static void onCustomPayload(Object event) {
+        try {
+            Method getPayload = event.getClass().getMethod("getPayload");
+            FriendlyByteBuf payload = (FriendlyByteBuf) getPayload.invoke(event);
+            byte[] bytes = new byte[payload.readableBytes()];
+            payload.readBytes(bytes);
+            handleServerMessage(new String(bytes, StandardCharsets.UTF_8).trim());
+        } catch (Exception e) {
+            LOGGER.debug("Ignoring unrecognized payload event type: {}", e.getMessage());
+        }
     }
 
     private static void onScreenRenderPost(ScreenEvent.Render.Post event) {
@@ -173,10 +187,11 @@ public class Send_modlist {
         }
 
         try {
-            CustomPacketPayload payload = createForgePayload(pendingModListPayloadBytes);
-            Minecraft.getInstance().getConnection().getConnection().send(
-                    new ServerboundCustomPayloadPacket(payload)
-            );
+            Object packet = createServerboundCustomPayloadPacket(pendingModListPayloadBytes);
+            Class<?> packetClass = Class.forName("net.minecraft.network.protocol.Packet");
+            Minecraft.getInstance().getConnection().getConnection().getClass()
+                    .getMethod("send", packetClass)
+                    .invoke(Minecraft.getInstance().getConnection().getConnection(), packet);
             modListPayloadDelivered = true;
             LOGGER.info("Sent mod list payload (play): {} bytes", pendingModListPayloadBytes.length);
         } catch (Exception e) {
@@ -184,7 +199,24 @@ public class Send_modlist {
         }
     }
 
-    private static CustomPacketPayload createForgePayload(byte[] payloadBytes) throws Exception {
+    private static Object createServerboundCustomPayloadPacket(byte[] payloadBytes) throws Exception {
+        try {
+            Class<?> packetClass = Class.forName("net.minecraft.network.protocol.game.ServerboundCustomPayloadPacket");
+            Constructor<?> ctor = packetClass.getConstructor(
+                    net.minecraft.resources.ResourceLocation.class,
+                    FriendlyByteBuf.class
+            );
+            FriendlyByteBuf encoder = new FriendlyByteBuf(Unpooled.wrappedBuffer(payloadBytes));
+            return ctor.newInstance(ModListProtocol.CHANNEL_ID, encoder);
+        } catch (ClassNotFoundException | NoSuchMethodException ignored) {
+            Object payload = createForgePayload(payloadBytes);
+            Class<?> packetClass = Class.forName("net.minecraft.network.protocol.common.ServerboundCustomPayloadPacket");
+            Class<?> customPacketPayloadClass = Class.forName("net.minecraft.network.protocol.common.custom.CustomPacketPayload");
+            return packetClass.getConstructor(customPacketPayloadClass).newInstance(payload);
+        }
+    }
+
+    private static Object createForgePayload(byte[] payloadBytes) throws Exception {
         Class<?> payloadClass = Class.forName("net.minecraftforge.network.ForgePayload");
         for (var method : payloadClass.getDeclaredMethods()) {
             if (!"create".equals(method.getName()) || method.getParameterCount() != 2) {
@@ -200,7 +232,7 @@ public class Send_modlist {
             }
             method.setAccessible(true);
             Consumer<FriendlyByteBuf> encoder = buf -> buf.writeBytes(payloadBytes);
-            return (CustomPacketPayload) method.invoke(null, ModListProtocol.CHANNEL_ID, encoder);
+            return method.invoke(null, ModListProtocol.CHANNEL_ID, encoder);
         }
         throw new IllegalStateException("Unsupported ForgePayload.create signature");
     }
