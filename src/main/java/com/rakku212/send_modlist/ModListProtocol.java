@@ -6,7 +6,7 @@ public final class ModListProtocol {
     public static final String CHANNEL_NAMESPACE = "send_modlist";
     public static final String CHANNEL_PATH = "modlist";
     public static final ResourceLocation CHANNEL_ID =
-            ResourceLocation.fromNamespaceAndPath(CHANNEL_NAMESPACE, CHANNEL_PATH);
+            new ResourceLocation(CHANNEL_NAMESPACE, CHANNEL_PATH);
 
     public static final String REQUEST_MODLIST = "REQUEST_MODLIST";
     public static final String REQUEST_MODLIST_SEPARATOR = "|";
