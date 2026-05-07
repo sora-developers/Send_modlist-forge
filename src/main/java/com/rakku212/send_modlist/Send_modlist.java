@@ -1,22 +1,23 @@
 package com.rakku212.send_modlist;
 
+import com.mojang.blaze3d.matrix.MatrixStack;
+import io.netty.buffer.Unpooled;
 import net.minecraft.client.Minecraft;
-import net.minecraft.client.gui.GuiGraphics;
-import net.minecraft.client.gui.screens.Screen;
-import net.minecraft.network.FriendlyByteBuf;
-import net.minecraft.network.chat.Component;
-import net.minecraft.network.protocol.common.ServerboundCustomPayloadPacket;
-import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
-import net.minecraftforge.client.event.ClientPlayerNetworkEvent;
-import net.minecraftforge.client.event.ScreenEvent;
+import net.minecraft.client.gui.AbstractGui;
+import net.minecraft.client.gui.screen.Screen;
+import net.minecraft.network.PacketBuffer;
+import net.minecraft.network.play.client.CCustomPayloadPacket;
+import net.minecraft.util.text.ITextComponent;
+import net.minecraft.util.text.StringTextComponent;
 import net.minecraftforge.event.TickEvent;
-import net.minecraftforge.event.network.CustomPayloadEvent;
 import net.minecraftforge.fml.common.Mod;
 import net.minecraftforge.fml.javafmlmod.FMLJavaModLoadingContext;
 import net.minecraftforge.fml.loading.FMLLoader;
+import net.minecraftforge.fml.network.NetworkEvent;
+import net.minecraftforge.fml.network.NetworkRegistry;
+import net.minecraftforge.fml.network.event.EventNetworkChannel;
 import net.minecraftforge.forgespi.language.IModInfo;
-import net.minecraftforge.network.ChannelBuilder;
-import net.minecraftforge.network.EventNetworkChannel;
+import net.minecraftforge.versions.forge.ForgeVersion;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -24,12 +25,11 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.List;
-import java.util.function.Consumer;
 
 @Mod(Constants.MOD_ID)
 public class Send_modlist {
     private static final Logger LOGGER = LoggerFactory.getLogger(Constants.MOD_NAME);
-    private static final Component VERIFYING_MODLIST_MESSAGE = Component.literal("mod verifying...");
+    private static final ITextComponent VERIFYING_MODLIST_MESSAGE = new StringTextComponent("mod verifying...");
     private static boolean awaitingModListAccepted;
     private static boolean modListPayloadDelivered;
     private static byte[] sessionHmacKey;
@@ -37,43 +37,39 @@ public class Send_modlist {
     private static boolean modListPayloadBuildFailed;
     private static int trySendLogCooldown;
 
-    public static final EventNetworkChannel CHANNEL = ChannelBuilder
+    public static final EventNetworkChannel CHANNEL = NetworkRegistry.ChannelBuilder
             .named(ModListProtocol.CHANNEL_ID)
-            .optional()
+            .networkProtocolVersion(() -> "1")
+            .clientAcceptedVersions(ignored -> true)
+            .serverAcceptedVersions(ignored -> true)
             .eventNetworkChannel();
 
     public Send_modlist(FMLJavaModLoadingContext context) {
         CommonClass.init();
         CHANNEL.addListener(Send_modlist::onCustomPayload);
-        net.minecraftforge.common.MinecraftForge.EVENT_BUS.addListener(Send_modlist::onScreenRenderPost);
         net.minecraftforge.common.MinecraftForge.EVENT_BUS.addListener(Send_modlist::onClientTick);
-        net.minecraftforge.common.MinecraftForge.EVENT_BUS.addListener(Send_modlist::onLoggingOut);
     }
 
-    private static void onCustomPayload(CustomPayloadEvent event) {
-        FriendlyByteBuf payload = event.getPayload();
+    private static void onCustomPayload(NetworkEvent.ServerCustomPayloadEvent event) {
+        PacketBuffer payload = event.getPayload();
+        if (payload == null || payload.readableBytes() <= 0) {
+            return;
+        }
         byte[] bytes = new byte[payload.readableBytes()];
         payload.readBytes(bytes);
         handleServerMessage(new String(bytes, StandardCharsets.UTF_8).trim());
-    }
-
-    private static void onScreenRenderPost(ScreenEvent.Render.Post event) {
-        if (!awaitingModListAccepted) {
-            return;
-        }
-        fillOverlay(event.getGuiGraphics(), event.getScreen().width, event.getScreen().height);
     }
 
     private static void onClientTick(TickEvent.ClientTickEvent event) {
         if (event.phase != TickEvent.Phase.END) {
             return;
         }
+        if (Minecraft.getInstance().getConnection() == null) {
+            resetModListSession();
+            return;
+        }
         ensureVerifyingScreenVisible();
         tryDeliverModListPayload();
-    }
-
-    private static void onLoggingOut(ClientPlayerNetworkEvent.LoggingOut event) {
-        resetModListSession();
     }
 
     private static void handleServerMessage(String message) {
@@ -136,20 +132,21 @@ public class Send_modlist {
 
     private static void ensureVerifyingScreenVisible() {
         Minecraft client = Minecraft.getInstance();
+        Screen current = client.screen;
         if (!awaitingModListAccepted) {
-            if (client.screen instanceof VerifyingScreen) {
+            if (current instanceof VerifyingScreen) {
                 client.setScreen(null);
             }
             return;
         }
-        if (client.screen == null) {
+        if (current == null) {
             client.setScreen(new VerifyingScreen());
         }
     }
 
-    private static void fillOverlay(GuiGraphics graphics, int width, int height) {
-        graphics.fill(0, 0, width, height, 0xC0101010);
-        graphics.drawCenteredString(Minecraft.getInstance().font, VERIFYING_MODLIST_MESSAGE, width / 2, height / 2 - 9, 0xFFFFFF);
+    private static void fillOverlay(MatrixStack matrixStack, int width, int height) {
+        AbstractGui.fill(matrixStack, 0, 0, width, height, 0xC0101010);
+        AbstractGui.drawCenteredString(matrixStack, Minecraft.getInstance().font, VERIFYING_MODLIST_MESSAGE, width / 2, height / 2 - 9, 0xFFFFFF);
     }
 
     private static void tryDeliverModListPayload() {
@@ -173,36 +170,15 @@ public class Send_modlist {
         }
 
         try {
-            CustomPacketPayload payload = createForgePayload(pendingModListPayloadBytes);
+            PacketBuffer payload = new PacketBuffer(Unpooled.wrappedBuffer(pendingModListPayloadBytes));
             Minecraft.getInstance().getConnection().getConnection().send(
-                    new ServerboundCustomPayloadPacket(payload)
+                    new CCustomPayloadPacket(ModListProtocol.CHANNEL_ID, payload)
             );
             modListPayloadDelivered = true;
             LOGGER.info("Sent mod list payload (play): {} bytes", pendingModListPayloadBytes.length);
         } catch (Exception e) {
             LOGGER.warn("Play modlist send failed (retry next tick): {}", e.getMessage());
         }
-    }
-
-    private static CustomPacketPayload createForgePayload(byte[] payloadBytes) throws Exception {
-        Class<?> payloadClass = Class.forName("net.minecraftforge.network.ForgePayload");
-        for (var method : payloadClass.getDeclaredMethods()) {
-            if (!"create".equals(method.getName()) || method.getParameterCount() != 2) {
-                continue;
-            }
-            Class<?>[] parameterTypes = method.getParameterTypes();
-            if (!parameterTypes[1].isAssignableFrom(Consumer.class) && !Consumer.class.isAssignableFrom(parameterTypes[1])) {
-                continue;
-            }
-            if (!parameterTypes[0].isAssignableFrom(ModListProtocol.CHANNEL_ID.getClass())
-                    && !ModListProtocol.CHANNEL_ID.getClass().isAssignableFrom(parameterTypes[0])) {
-                continue;
-            }
-            method.setAccessible(true);
-            Consumer<FriendlyByteBuf> encoder = buf -> buf.writeBytes(payloadBytes);
-            return (CustomPacketPayload) method.invoke(null, ModListProtocol.CHANNEL_ID, encoder);
-        }
-        throw new IllegalStateException("Unsupported ForgePayload.create signature");
     }
 
     private static void bumpWaitLog() {
@@ -225,7 +201,7 @@ public class Send_modlist {
             ));
         }
 
-        String loaderVersion = FMLLoader.versionInfo().forgeVersion();
+        String loaderVersion = ForgeVersion.getVersion();
         String jsonBody = ModListPayloadBuilder
                 .build("forge", loaderVersion, mods)
                 .toString();
@@ -259,8 +235,8 @@ public class Send_modlist {
         }
 
         @Override
-        public void render(GuiGraphics guiGraphics, int mouseX, int mouseY, float partialTick) {
-            fillOverlay(guiGraphics, this.width, this.height);
+        public void render(MatrixStack matrixStack, int mouseX, int mouseY, float partialTick) {
+            fillOverlay(matrixStack, this.width, this.height);
         }
     }
 }
