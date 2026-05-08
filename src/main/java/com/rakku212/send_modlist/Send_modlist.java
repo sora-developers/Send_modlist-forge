@@ -1,18 +1,23 @@
 package com.rakku212.send_modlist;
 
 import io.netty.buffer.Unpooled;
-import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiScreen;
+import net.minecraft.client.Minecraft;
 import net.minecraft.network.PacketBuffer;
 import net.minecraft.network.play.client.CPacketCustomPayload;
+import net.minecraftforge.fml.common.FMLCommonHandler;
 import net.minecraftforge.fml.common.Mod;
-import net.minecraftforge.fml.loading.FMLLoader;
+import net.minecraftforge.fml.common.Loader;
+import net.minecraftforge.fml.common.ModContainer;
+import net.minecraftforge.fml.common.event.FMLInitializationEvent;
+import net.minecraftforge.fml.common.eventhandler.SubscribeEvent;
 import net.minecraftforge.fml.common.gameevent.TickEvent;
-import net.minecraftforge.fml.network.NetworkEvent;
-import net.minecraftforge.fml.network.NetworkRegistry;
-import net.minecraftforge.fml.network.event.EventNetworkChannel;
-import net.minecraftforge.forgespi.language.IModInfo;
-import net.minecraftforge.versions.forge.ForgeVersion;
+import net.minecraftforge.fml.common.network.FMLNetworkEvent;
+import net.minecraftforge.fml.common.network.NetworkRegistry;
+import net.minecraftforge.fml.common.network.internal.FMLProxyPacket;
+import net.minecraftforge.fml.common.network.FMLEventChannel;
+import net.minecraftforge.fml.relauncher.Side;
+import net.minecraftforge.fml.relauncher.SideOnly;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
@@ -21,8 +26,9 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.List;
+import java.util.Arrays;
 
-@Mod(Constants.MOD_ID)
+@Mod(modid = Constants.MOD_ID, name = Constants.MOD_NAME, version = Constants.MOD_VERSION, acceptedMinecraftVersions = "[1.12.2]")
 public class Send_modlist {
     private static final Logger LOGGER = LogManager.getLogger(Constants.MOD_NAME);
     private static final String VERIFYING_MODLIST_MESSAGE = "mod verifying...";
@@ -33,56 +39,118 @@ public class Send_modlist {
     private static boolean modListPayloadBuildFailed;
     private static int trySendLogCooldown;
     private static boolean channelRegistrationSent;
-    public static final EventNetworkChannel CHANNEL = NetworkRegistry.ChannelBuilder
-            .named(ModListProtocol.CHANNEL_ID)
-            .networkProtocolVersion(() -> "1")
-            .clientAcceptedVersions(ignored -> true)
-            .serverAcceptedVersions(ignored -> true)
-            .eventNetworkChannel();
-    public static final EventNetworkChannel LEGACY_CHANNEL = NetworkRegistry.ChannelBuilder
-            .named(ModListProtocol.CHANNEL_ID_LEGACY)
-            .networkProtocolVersion(() -> "1")
-            .clientAcceptedVersions(ignored -> true)
-            .serverAcceptedVersions(ignored -> true)
-            .eventNetworkChannel();
+
+    public static final FMLEventChannel LEGACY_CHANNEL =
+            NetworkRegistry.INSTANCE.newEventDrivenChannel(ModListProtocol.CHANNEL_ID_LEGACY);
+    public static final FMLEventChannel NAMESPACED_CHANNEL =
+            NetworkRegistry.INSTANCE.newEventDrivenChannel(ModListProtocol.CHANNEL_ID_NAMESPACED);
+    private static String replyChannel = ModListProtocol.CHANNEL_ID_LEGACY;
 
     public Send_modlist() {
         CommonClass.init();
-        CHANNEL.addListener(Send_modlist::onCustomPayload);
-        LEGACY_CHANNEL.addListener(Send_modlist::onCustomPayload);
-        net.minecraftforge.common.MinecraftForge.EVENT_BUS.addListener(Send_modlist::onClientTick);
+        LOGGER.info("[modlist-debug] constructor loaded");
     }
 
-    private static void onCustomPayload(NetworkEvent.ServerCustomPayloadEvent event) {
-        PacketBuffer payload = event.getPayload();
-        if (payload == null || payload.readableBytes() <= 0) {
-            return;
+    @Mod.EventHandler
+    public void init(FMLInitializationEvent event) {
+        LOGGER.info("[modlist-debug] init side={}", event.getSide());
+        if (FMLCommonHandler.instance().getSide().isClient()) {
+            ClientOnlyHandler handler = new ClientOnlyHandler();
+            LEGACY_CHANNEL.register(handler);
+            NAMESPACED_CHANNEL.register(handler);
+            net.minecraftforge.common.MinecraftForge.EVENT_BUS.register(handler);
+            LOGGER.info("[modlist-debug] client handlers registered");
         }
-        byte[] bytes = new byte[payload.readableBytes()];
-        payload.readBytes(bytes);
-        handleServerMessage(new String(bytes, StandardCharsets.UTF_8).trim());
     }
 
-    private static void onClientTick(TickEvent.ClientTickEvent event) {
-        if (event.phase != TickEvent.Phase.END) {
-            return;
+    @SideOnly(Side.CLIENT)
+    private static class ClientOnlyHandler {
+        @SubscribeEvent
+        public void onConnected(FMLNetworkEvent.ClientConnectedToServerEvent event) {
+            LOGGER.info("[modlist-debug] connected local={} remote={}",
+                    event.isLocal(),
+                    event.getManager() != null ? event.getManager().getRemoteAddress() : "null");
+            resetModListSession();
         }
-        if (Minecraft.getInstance().getConnection() == null) {
-            if (hasActiveSessionState()) {
-                resetModListSession();
+
+        @SubscribeEvent
+        public void onDisconnected(FMLNetworkEvent.ClientDisconnectionFromServerEvent event) {
+            LOGGER.info("[modlist-debug] disconnected remote={}",
+                    event.getManager() != null ? event.getManager().getRemoteAddress() : "null");
+            resetModListSession();
+        }
+
+        @SubscribeEvent
+        public void onCustomPayload(FMLNetworkEvent.ClientCustomPacketEvent event) {
+            FMLProxyPacket packet = event.getPacket();
+            if (packet == null || packet.payload() == null || packet.payload().readableBytes() <= 0) {
+                LOGGER.debug("[modlist-debug] payload ignored");
+                return;
             }
+            LOGGER.info("[modlist-debug] payload received channel={} bytes={}", packet.channel(), packet.payload().readableBytes());
+            replyChannel = packet.channel();
+            byte[] bytes = new byte[packet.payload().readableBytes()];
+            packet.payload().readBytes(bytes);
+            String body = new String(bytes, StandardCharsets.UTF_8);
+            LOGGER.info("[modlist-debug] payload body={}", body);
+            handleServerMessage(body.trim());
+        }
+
+        @SubscribeEvent
+        public void onClientTick(TickEvent.ClientTickEvent event) {
+            if (event.phase != TickEvent.Phase.END) {
+                return;
+            }
+            if (Minecraft.getMinecraft().getConnection() == null) {
+                if (hasActiveSessionState()) {
+                    LOGGER.info("[modlist-debug] tick disconnected -> reset");
+                    resetModListSession();
+                }
+                return;
+            }
+            trySendChannelRegisterPacket();
+            ensureVerifyingScreenVisible();
+            tryDeliverModListPayload();
+        }
+    }
+
+    private static void trySendChannelRegisterPacket() {
+        if (channelRegistrationSent) {
             return;
         }
-        tryRegisterPluginChannels();
-        ensureVerifyingScreenVisible();
-        tryDeliverModListPayload();
+        if (Minecraft.getMinecraft().getConnection() == null) {
+            LOGGER.debug("[modlist-debug] register skipped no connection");
+            return;
+        }
+        try {
+            String registerBody = String.join("\u0000", ModListProtocol.REGISTER_CHANNELS);
+            byte[] channelBytes = registerBody.getBytes(StandardCharsets.UTF_8);
+            PacketBuffer registerPayload = new PacketBuffer(Unpooled.wrappedBuffer(channelBytes));
+            Minecraft.getMinecraft().getConnection().sendPacket(
+                    new CPacketCustomPayload("REGISTER", registerPayload)
+            );
+            channelRegistrationSent = true;
+            LOGGER.info("Registered plugin channels: {}", Arrays.toString(ModListProtocol.REGISTER_CHANNELS));
+        } catch (Exception e) {
+            LOGGER.warn("Failed to register plugin channel: {}", e.getMessage());
+        }
+    }
+
+    private static boolean hasActiveSessionState() {
+        if (awaitingModListAccepted || modListPayloadDelivered || sessionHmacKey != null
+                || pendingModListPayloadBytes != null || modListPayloadBuildFailed || channelRegistrationSent) {
+            return true;
+        }
+        Minecraft client = Minecraft.getMinecraft();
+        return client.currentScreen instanceof VerifyingScreen;
     }
 
     private static void handleServerMessage(String message) {
-        String requestPrefix =
-                ModListProtocol.REQUEST_MODLIST + ModListProtocol.REQUEST_MODLIST_SEPARATOR;
+        LOGGER.info("[modlist-debug] handle message={}", message);
+        String requestPrefix = ModListProtocol.REQUEST_MODLIST + ModListProtocol.REQUEST_MODLIST_SEPARATOR;
         if (message.startsWith(requestPrefix)) {
             String keyB64 = message.substring(requestPrefix.length());
+            LOGGER.info("[modlist-debug] request received keyLen={}", keyB64.length());
             byte[] decodedKey;
             try {
                 decodedKey = Base64.getDecoder().decode(keyB64);
@@ -100,6 +168,7 @@ public class Send_modlist {
             pendingModListPayloadBytes = null;
             modListPayloadBuildFailed = false;
             trySendLogCooldown = 0;
+            LOGGER.info("[modlist-debug] key accepted bytes={}", decodedKey.length);
             return;
         }
 
@@ -109,6 +178,7 @@ public class Send_modlist {
         }
 
         if (ModListProtocol.MODLIST_ACCEPTED.equals(message)) {
+            LOGGER.info("[modlist-debug] server accepted modlist");
             clearVerifyingOverlay();
             return;
         }
@@ -124,7 +194,7 @@ public class Send_modlist {
     }
 
     private static void resetModListSession() {
-        Minecraft client = Minecraft.getInstance();
+        Minecraft client = Minecraft.getMinecraft();
         if (client.currentScreen instanceof VerifyingScreen) {
             client.displayGuiScreen(null);
         }
@@ -135,38 +205,12 @@ public class Send_modlist {
         modListPayloadBuildFailed = false;
         trySendLogCooldown = 0;
         channelRegistrationSent = false;
-    }
-
-    private static boolean hasActiveSessionState() {
-        if (awaitingModListAccepted || modListPayloadDelivered || sessionHmacKey != null
-                || pendingModListPayloadBytes != null || modListPayloadBuildFailed || channelRegistrationSent) {
-            return true;
-        }
-        Minecraft client = Minecraft.getInstance();
-        return client.currentScreen instanceof VerifyingScreen;
-    }
-
-    private static void tryRegisterPluginChannels() {
-        if (channelRegistrationSent) {
-            return;
-        }
-        if (Minecraft.getInstance().getConnection() == null) {
-            return;
-        }
-        byte[] registerBytes = ModListProtocol.REGISTER_NAME.getBytes(StandardCharsets.UTF_8);
-        PacketBuffer registerPayload = new PacketBuffer(Unpooled.wrappedBuffer(registerBytes));
-        try {
-            Minecraft.getInstance().getConnection().sendPacket(
-                    new CPacketCustomPayload(ModListProtocol.REGISTER_CHANNEL, registerPayload)
-            );
-            channelRegistrationSent = true;
-        } catch (Exception exception) {
-            LOGGER.debug("Plugin channel register failed, will retry: {}", exception.getMessage());
-        }
+        replyChannel = ModListProtocol.CHANNEL_ID_LEGACY;
+        LOGGER.info("[modlist-debug] state reset");
     }
 
     private static void ensureVerifyingScreenVisible() {
-        Minecraft client = Minecraft.getInstance();
+        Minecraft client = Minecraft.getMinecraft();
         GuiScreen current = client.currentScreen;
         if (!awaitingModListAccepted) {
             if (current instanceof VerifyingScreen) {
@@ -187,25 +231,27 @@ public class Send_modlist {
             return;
         }
         if (pendingModListPayloadBytes == null) {
+            LOGGER.info("[modlist-debug] building payload");
             pendingModListPayloadBytes = buildModListPayloadBytes();
             if (pendingModListPayloadBytes == null) {
                 modListPayloadBuildFailed = true;
+                LOGGER.warn("[modlist-debug] payload build failed");
                 return;
             }
+            LOGGER.info("[modlist-debug] payload built bytes={}", pendingModListPayloadBytes.length);
         }
 
-        if (Minecraft.getInstance().getConnection() == null) {
+        if (Minecraft.getMinecraft().getConnection() == null) {
             bumpWaitLog();
             return;
         }
 
         try {
             PacketBuffer payload = new PacketBuffer(Unpooled.wrappedBuffer(pendingModListPayloadBytes));
-            Minecraft.getInstance().getConnection().sendPacket(
-                    new CPacketCustomPayload(ModListProtocol.CHANNEL_ID, payload)
-            );
+            Minecraft.getMinecraft().getConnection().sendPacket(new CPacketCustomPayload(replyChannel, payload));
             modListPayloadDelivered = true;
-            LOGGER.info("Sent mod list payload (play): {} bytes", pendingModListPayloadBytes.length);
+            LOGGER.info("Sent mod list payload (play): {} bytes via channel={}", pendingModListPayloadBytes.length, replyChannel);
+            LOGGER.info("[modlist-debug] payload sent");
         } catch (Exception e) {
             LOGGER.warn("Play modlist send failed (retry next tick): {}", e.getMessage());
         }
@@ -216,25 +262,27 @@ public class Send_modlist {
             trySendLogCooldown--;
         } else {
             trySendLogCooldown = 100;
-            LOGGER.debug("Waiting for play connection before modlist send");
+            LOGGER.info("[modlist-debug] waiting for connection before payload send");
         }
     }
 
     private static byte[] buildModListPayloadBytes() {
         List<ModListPayloadBuilder.ModInfo> mods = new ArrayList<>();
-        for (IModInfo mod : FMLLoader.getLoadingModList().getMods()) {
+        for (ModContainer mod : Loader.instance().getModList()) {
             mods.add(new ModListPayloadBuilder.ModInfo(
                     mod.getModId(),
-                    mod.getDisplayName(),
-                    mod.getVersion().toString(),
+                    mod.getName(),
+                    mod.getVersion(),
                     "CLIENT"
             ));
         }
+        LOGGER.info("[modlist-debug] mods collected={}", mods.size());
 
-        String loaderVersion = ForgeVersion.getVersion();
+        String loaderVersion = "14.23.5";
         String jsonBody = ModListPayloadBuilder
                 .build("forge", loaderVersion, mods)
                 .toString();
+        LOGGER.info("[modlist-debug] json chars={}", jsonBody.length());
         if (sessionHmacKey == null) {
             LOGGER.warn("Cannot build mod list payload: no HMAC session key");
             return null;
@@ -246,26 +294,26 @@ public class Send_modlist {
             return null;
         }
 
+        LOGGER.info("[modlist-debug] signed payload bytes={}", payloadBytes.length);
         return payloadBytes;
     }
 
+    @SideOnly(Side.CLIENT)
     private static final class VerifyingScreen extends GuiScreen {
-        private VerifyingScreen() {
-        }
-
-        @SuppressWarnings("unused")
-        protected void keyTyped(char typedChar, int keyCode) throws IOException {
-            // Keep this screen open until verification is finished.
-        }
 
         @Override
         public boolean doesGuiPauseGame() {
             return false;
         }
 
-        @SuppressWarnings("unused")
-        public void drawScreen(int mouseX, int mouseY, float partialTick) {
-            drawRect(0, 0, this.width, this.height, 0xC0101010);
+        @Override
+        protected void keyTyped(char typedChar, int keyCode) {
+            // Disable closing while verification is pending.
+        }
+
+        @Override
+        public void drawScreen(int mouseX, int mouseY, float partialTicks) {
+            this.drawDefaultBackground();
             drawCenteredString(
                     this.fontRenderer,
                     VERIFYING_MODLIST_MESSAGE,
