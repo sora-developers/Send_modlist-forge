@@ -1,9 +1,7 @@
 package com.rakku212.send_modlist;
 
-import com.mojang.blaze3d.matrix.MatrixStack;
 import io.netty.buffer.Unpooled;
 import net.minecraft.client.Minecraft;
-import net.minecraft.client.gui.AbstractGui;
 import net.minecraft.client.gui.screen.Screen;
 import net.minecraft.network.PacketBuffer;
 import net.minecraft.network.play.client.CCustomPayloadPacket;
@@ -28,7 +26,8 @@ import java.util.List;
 @Mod(Constants.MOD_ID)
 public class Send_modlist {
     private static final Logger LOGGER = LogManager.getLogger(Constants.MOD_NAME);
-    private static final ITextComponent VERIFYING_MODLIST_MESSAGE = new StringTextComponent("mod verifying...");
+    private static final String VERIFYING_MODLIST_MESSAGE = "mod verifying...";
+    private static final ITextComponent VERIFYING_MODLIST_TITLE = new StringTextComponent(VERIFYING_MODLIST_MESSAGE);
     private static boolean awaitingModListAccepted;
     private static boolean modListPayloadDelivered;
     private static byte[] sessionHmacKey;
@@ -143,11 +142,6 @@ public class Send_modlist {
         }
     }
 
-    private static void fillOverlay(MatrixStack matrixStack, int width, int height) {
-        AbstractGui.fill(matrixStack, 0, 0, width, height, 0xC0101010);
-        AbstractGui.drawCenteredString(matrixStack, Minecraft.getInstance().font, VERIFYING_MODLIST_MESSAGE, width / 2, height / 2 - 9, 0xFFFFFF);
-    }
-
     private static void tryDeliverModListPayload() {
         if (!awaitingModListAccepted || modListPayloadDelivered) {
             return;
@@ -220,7 +214,7 @@ public class Send_modlist {
 
     private static final class VerifyingScreen extends Screen {
         private VerifyingScreen() {
-            super(VERIFYING_MODLIST_MESSAGE);
+            super(VERIFYING_MODLIST_TITLE);
         }
 
         @Override
@@ -234,8 +228,15 @@ public class Send_modlist {
         }
 
         @Override
-        public void render(MatrixStack matrixStack, int mouseX, int mouseY, float partialTick) {
-            fillOverlay(matrixStack, this.width, this.height);
+        public void render(int mouseX, int mouseY, float partialTick) {
+            fill(0, 0, this.width, this.height, 0xC0101010);
+            drawCenteredString(
+                    Minecraft.getInstance().font,
+                    VERIFYING_MODLIST_MESSAGE,
+                    this.width / 2,
+                    this.height / 2 - 9,
+                    0xFFFFFF
+            );
         }
     }
 }
