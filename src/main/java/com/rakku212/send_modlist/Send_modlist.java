@@ -12,6 +12,8 @@ import net.minecraftforge.fml.javafmlmod.FMLJavaModLoadingContext;
 import net.minecraftforge.fml.loading.FMLLoader;
 import net.minecraftforge.forgespi.language.IModInfo;
 import net.minecraftforge.network.NetworkEvent;
+import net.minecraftforge.network.NetworkRegistry;
+import net.minecraftforge.network.event.EventNetworkChannel;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -24,6 +26,13 @@ import java.util.List;
 
 @Mod(Constants.MOD_ID)
 public class Send_modlist {
+    private static final EventNetworkChannel MODLIST_CHANNEL =
+            NetworkRegistry.ChannelBuilder.named(ModListProtocol.CHANNEL_ID)
+                    .networkProtocolVersion(() -> "1")
+                    .clientAcceptedVersions(NetworkRegistry.acceptMissingOr("1"))
+                    .serverAcceptedVersions(NetworkRegistry.acceptMissingOr("1"))
+                    .eventNetworkChannel();
+
     private static final Logger LOGGER = LoggerFactory.getLogger(Constants.MOD_NAME);
     private static final Component VERIFYING_MODLIST_MESSAGE = Component.literal("mod verifying...");
     private static boolean awaitingModListAccepted;
@@ -34,20 +43,24 @@ public class Send_modlist {
     private static int trySendLogCooldown;
 
     public Send_modlist(FMLJavaModLoadingContext context) {
+        MODLIST_CHANNEL.addListener(Send_modlist::onModlistNetworkEvent);
         CommonClass.init();
-        net.minecraftforge.common.MinecraftForge.EVENT_BUS.addListener(Send_modlist::onCustomPayload);
         net.minecraftforge.common.MinecraftForge.EVENT_BUS.addListener(Send_modlist::onClientTick);
         net.minecraftforge.common.MinecraftForge.EVENT_BUS.addListener(Send_modlist::onLoggingOut);
     }
 
-    private static void onCustomPayload(NetworkEvent.ServerCustomPayloadEvent event) {
+    private static void onModlistNetworkEvent(NetworkEvent event) {
+        NetworkEvent.Context ctx = event.getSource().get();
         FriendlyByteBuf payload = event.getPayload();
         if (payload == null || payload.readableBytes() <= 0) {
+            ctx.setPacketHandled(true);
             return;
         }
         byte[] bytes = new byte[payload.readableBytes()];
         payload.readBytes(bytes);
-        handleServerMessage(new String(bytes, StandardCharsets.UTF_8).trim());
+        String message = new String(bytes, StandardCharsets.UTF_8).trim();
+        ctx.enqueueWork(() -> handleServerMessage(message));
+        ctx.setPacketHandled(true);
     }
 
     private static void onClientTick(TickEvent.ClientTickEvent event) {
