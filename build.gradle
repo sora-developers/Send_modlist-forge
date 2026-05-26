@@ -1,0 +1,27 @@
+buildscript {
+    repositories {
+        maven { url = "https://maven.minecraftforge.net/" }
+        mavenCentral()
+    }
+    dependencies {
+        classpath files("${projectDir}/retrofuturagradle-1.3.27.jar")
+    }
+}
+
+apply plugin: "com.gtnewhorizons.retrofuturagradle"
+
+group = "com.rakku212"
+version = "1.0"
+archivesBaseName = "send_modlist"
+
+minecraft {
+    mcVersion = "1.7.10"
+    mcpMappingChannel = "stable"
+    mcpMappingVersion = "12"
+}
+
+sourceCompatibility = targetCompatibility = JavaVersion.VERSION_1_8
+compileJava {
+    sourceCompatibility = targetCompatibility = JavaVersion.VERSION_1_8
+    options.encoding = "UTF-8"
+}

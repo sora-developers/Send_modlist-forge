@@ -1,0 +1,11 @@
+[{
+    "modid": "send_modlist",
+    "name": "Send_modlist",
+    "description": "",
+    "version": "1.0",
+    "mcversion": "1.7.10",
+    "authorList": ["neko developer"],
+    "logoFile": "",
+    "screenshots": [],
+    "dependencies": []
+}]
