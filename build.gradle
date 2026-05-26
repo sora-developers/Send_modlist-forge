@@ -1,0 +1,60 @@
+buildscript {
+    repositories {
+        maven { url = "https://maven.minecraftforge.net/" }
+        mavenCentral()
+    }
+    dependencies {
+        classpath "net.minecraftforge.gradle:ForgeGradle:2.1-SNAPSHOT"
+    }
+}
+
+apply plugin: "net.minecraftforge.gradle.forge"
+apply plugin: "eclipse"
+apply plugin: "idea"
+
+group = mod_group_id
+version = "${mod_version}-${minecraft_version}"
+archivesBaseName = mod_id
+
+sourceCompatibility = targetCompatibility = JavaVersion.VERSION_1_8
+compileJava {
+    sourceCompatibility = targetCompatibility = JavaVersion.VERSION_1_8
+    options.encoding = "UTF-8"
+}
+
+minecraft {
+    version = "${minecraft_version}-${forge_version}"
+    runDir = "run"
+    mappings = mapping_version
+    makeObfSourceJar = false
+}
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+}
+
+processResources {
+    inputs.property "version", project.version
+    inputs.property "mcversion", minecraft_version
+    inputs.property "modid", mod_id
+    inputs.property "modname", mod_name
+    inputs.property "modauthors", mod_authors
+    inputs.property "moddescription", mod_description
+
+    from(sourceSets.main.resources.srcDirs) {
+        include "mcmod.info"
+        expand "version": project.version,
+                "mcversion": minecraft_version,
+                "modid": mod_id,
+                "modname": mod_name,
+                "modauthors": mod_authors,
+                "moddescription": mod_description
+    }
+
+    from(sourceSets.main.resources.srcDirs) {
+        exclude "mcmod.info"
+    }
+}
