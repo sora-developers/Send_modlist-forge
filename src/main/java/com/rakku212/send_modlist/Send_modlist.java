@@ -1,7 +1,8 @@
 package com.rakku212.send_modlist;
 
 import net.minecraft.client.Minecraft;
-import net.minecraft.client.gui.GuiGraphics;
+import net.minecraft.client.gui.Font;
+import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.network.FriendlyByteBuf;
 import net.minecraft.network.chat.Component;
@@ -11,6 +12,7 @@ import net.minecraftforge.client.event.ClientPlayerNetworkEvent;
 import net.minecraftforge.client.event.ScreenEvent;
 import net.minecraftforge.event.TickEvent;
 import net.minecraftforge.event.network.CustomPayloadEvent;
+import net.minecraftforge.fml.ModList;
 import net.minecraftforge.fml.common.Mod;
 import net.minecraftforge.fml.javafmlmod.FMLJavaModLoadingContext;
 import net.minecraftforge.fml.loading.FMLLoader;
@@ -45,9 +47,9 @@ public class Send_modlist {
     public Send_modlist(FMLJavaModLoadingContext context) {
         CommonClass.init();
         CHANNEL.addListener(Send_modlist::onCustomPayload);
-        net.minecraftforge.common.MinecraftForge.EVENT_BUS.addListener(Send_modlist::onScreenRenderPost);
-        net.minecraftforge.common.MinecraftForge.EVENT_BUS.addListener(Send_modlist::onClientTick);
-        net.minecraftforge.common.MinecraftForge.EVENT_BUS.addListener(Send_modlist::onLoggingOut);
+        ScreenEvent.Render.Post.BUS.addListener(Send_modlist::onScreenRenderPost);
+        TickEvent.ClientTickEvent.Post.BUS.addListener(Send_modlist::onClientTick);
+        ClientPlayerNetworkEvent.LoggingOut.BUS.addListener(Send_modlist::onLoggingOut);
     }
 
     private static void onCustomPayload(CustomPayloadEvent event) {
@@ -64,10 +66,7 @@ public class Send_modlist {
         fillOverlay(event.getGuiGraphics(), event.getScreen().width, event.getScreen().height);
     }
 
-    private static void onClientTick(TickEvent.ClientTickEvent event) {
-        if (event.phase != TickEvent.Phase.END) {
-            return;
-        }
+    private static void onClientTick(TickEvent.ClientTickEvent.Post event) {
         ensureVerifyingScreenVisible();
         tryDeliverModListPayload();
     }
@@ -147,9 +146,10 @@ public class Send_modlist {
         }
     }
 
-    private static void fillOverlay(GuiGraphics graphics, int width, int height) {
+    private static void fillOverlay(GuiGraphicsExtractor graphics, int width, int height) {
         graphics.fill(0, 0, width, height, 0xC0101010);
-        graphics.drawCenteredString(Minecraft.getInstance().font, VERIFYING_MODLIST_MESSAGE, width / 2, height / 2 - 9, 0xFFFFFF);
+        Font font = Minecraft.getInstance().font;
+        graphics.text(font, VERIFYING_MODLIST_MESSAGE, width / 2 - font.width(VERIFYING_MODLIST_MESSAGE) / 2, height / 2 - 9, 0xFFFFFFFF);
     }
 
     private static void tryDeliverModListPayload() {
@@ -216,7 +216,7 @@ public class Send_modlist {
 
     private static byte[] buildModListPayloadBytes() {
         List<ModListPayloadBuilder.ModInfo> mods = new ArrayList<>();
-        for (IModInfo mod : FMLLoader.getLoadingModList().getMods()) {
+        for (IModInfo mod : ModList.getMods()) {
             mods.add(new ModListPayloadBuilder.ModInfo(
                     mod.getModId(),
                     mod.getDisplayName(),
@@ -259,7 +259,7 @@ public class Send_modlist {
         }
 
         @Override
-        public void render(GuiGraphics guiGraphics, int mouseX, int mouseY, float partialTick) {
+        public void extractRenderState(GuiGraphicsExtractor guiGraphics, int mouseX, int mouseY, float partialTick) {
             fillOverlay(guiGraphics, this.width, this.height);
         }
     }
